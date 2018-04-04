@@ -98,7 +98,15 @@ class Decoder(nn.Module):
     def forward(self, batch_hidden_state, batch_hidden_arc, cut, mask):
         mlp_hidden = self.mlp.forward(batch_hidden_state)
         arc_mlp_hidden = self.arc_mlp.forward(batch_hidden_arc)
-        mlp_hidden = mlp_hidden.masked_scatter(mask, arc_mlp_hidden.masked_select(mask))
+        if self.training:
+            b, s, h = mlp_hidden.size()
+            mlp_hidden = mlp_hidden.view(b * s, h)
+            b, s, h = arc_mlp_hidden.size()
+            arc_mlp_hidden = arc_mlp_hidden.view(b * s, h)
+            mlp_hidden = mlp_hidden.masked_scatter(mask, arc_mlp_hidden.masked_select(mask))
+            mlp_hidden = mlp_hidden.view(b, s, h)
+        else:
+            mlp_hidden = mlp_hidden.masked_scatter(mask, arc_mlp_hidden.masked_select(mask))
         if self.training:
             mlp_hidden = drop_sequence_sharedmask(mlp_hidden, self.config.dropout_mlp)
         outputs = self.output.forward(mlp_hidden)

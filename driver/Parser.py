@@ -144,7 +144,7 @@ class TransitionBasedParser(object):
 
     def batch_prepare(self):
         if self.b != self.index.size()[0]:
-            self.mask = Variable(torch.zeros(self.b, self.config.hidden_size)).type(torch.ByteTensor)
+            self.mask = Variable(torch.zeros(self.b, 1)).type(torch.ByteTensor)
             self.index = Variable(torch.ones(self.b * 4) * self.l1).type(torch.LongTensor)
             index_data = np.array([self.l1] * self.b * 4)
             self.index_arc = Variable(torch.ones(self.b * 2) * self.l1).type(torch.LongTensor)
@@ -153,7 +153,7 @@ class TransitionBasedParser(object):
                 self.index = self.index.cuda(self.device)
                 self.index_arc = self.index_arc.cuda(self.device)
                 self.mask = self.mask.cuda(self.device)
-        mask_data = np.array([[0] * self.config.hidden_size] * self.b)
+        mask_data = np.array([[0]] * self.b)
         for idx in range(0, self.b):
             cur_states = self.batch_states[idx]
             cur_step = self.step[idx]
@@ -170,7 +170,7 @@ class TransitionBasedParser(object):
                     offset_x = idx * 2
                     index_arc_data[offset_x] = s0 + offset_y
                     index_arc_data[offset_x + 1] = s1 + offset_y
-                    mask_data[idx] = 1
+                    mask_data[idx][0] = 1
         self.mask.data.copy_(torch.from_numpy(mask_data))
         if len(index_data) > 0:
             self.index.data.copy_(torch.from_numpy(index_data))
@@ -212,12 +212,12 @@ class TransitionBasedParser(object):
     def batch_gold_prepare(self):
         self.arc_num = self.gold_arc_action_num()
         self.a = self.max_action_len()
-        self.mask = Variable(torch.zeros(self.b, self.a, self.config.hidden_size)).type(torch.ByteTensor)
+        self.mask = Variable(torch.zeros(self.b * self.a, 1)).type(torch.ByteTensor)
         self.gold_index = Variable(torch.zeros(self.b * self.a * 4)).type(torch.LongTensor)
         self.gold_index_arc = Variable(torch.zeros(self.b * self.a * 2)).type(torch.LongTensor)
         index_data = np.array([self.l1] * self.b * self.a * 4)
         index_arc_data = np.array([self.l1] * self.b * self.a * 2)
-        mask_data = np.array([[[0] * self.config.hidden_size] * self.a] * self.b)
+        mask_data = np.array([[0]] * self.a * self.b)
         if self.use_cuda:
             self.gold_index = self.gold_index.cuda(self.device)
             self.gold_index_arc = self.gold_index_arc.cuda(self.device)
@@ -241,7 +241,8 @@ class TransitionBasedParser(object):
                         offset_x = idx * 2 + cur_step * self.b * 2
                         index_arc_data[offset_x] = s0 + offset_y
                         index_arc_data[offset_x + 1] = s1 + offset_y
-                        mask_data[idx][cur_step] = 1
+                        offset_mask = idx * self.a + cur_step
+                        mask_data[offset_mask][0] = 1
             self.next_gold_feats()
         self.gold_index.data.copy_(torch.from_numpy(index_data))
         self.gold_index_arc.data.copy_(torch.from_numpy(index_arc_data))
