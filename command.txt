@@ -1,0 +1,7 @@
+--thread 1 --config_file E:\py_workspace\MFast_ARC\DependencyParser\debug\debug --model model.debug --use-cuda
+
+--thread 1 --config_file E:\py_workspace\MFast_ARC\DependencyParser\debug\debug_suda --model model.debug --use-cuda
+
+--thread 1 --config_file E:\py_workspace\MFast_ARC\DependencyParser\debug\option_all --model model.debug --use-cuda
+
+--thread 1 --config_file E:\py_workspace\MFast_ARC\DependencyParser\debug\config.ptb.cfg --model model.debug --use-cuda
