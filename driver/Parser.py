@@ -79,10 +79,10 @@ class TransitionBasedParser(object):
                 self.step[idx] = 0
             hidden_states, hidden_arc = self.batch_gold_prepare()
             self.get_global_cut(vocab)
-            self.decoder_outputs = self.decoder.forward_hidden(batch_hidden_state=hidden_states,
-                                                               batch_hidden_arc=hidden_arc,
-                                                               cut=self.global_cut,
-                                                               mask=self.mask)
+            self.decoder_outputs = self.decoder.forward(batch_hidden_state=hidden_states,
+                                                        batch_hidden_arc=hidden_arc,
+                                                        cut=self.global_cut,
+                                                        mask=self.mask)
             d_outputs = self.decoder_outputs.transpose(0,1)
             self.gold_pred_pairs.clear()
             for idx in range(0, self.a):
@@ -100,10 +100,10 @@ class TransitionBasedParser(object):
             while not self.all_states_are_finished():
                 hidden_states, hidden_arc = self.batch_prepare()
                 self.get_cut(vocab)
-                action_scores = self.decoder.forward_hidden(batch_hidden_state=hidden_states,
-                                                            batch_hidden_arc=hidden_arc,
-                                                            cut=self.cut,
-                                                            mask=self.mask)
+                action_scores = self.decoder.forward(batch_hidden_state=hidden_states,
+                                                     batch_hidden_arc=hidden_arc,
+                                                     cut=self.cut,
+                                                     mask=self.mask)
                 pred_ac_ids = self.get_predicted_ac_id(action_scores)
                 pred_actions = self.get_predict_actions(pred_ac_ids, vocab)
                 self.move(pred_actions, vocab)
@@ -238,9 +238,9 @@ class TransitionBasedParser(object):
                         index_data[offset_x + 2] = s2 + offset_y
                         index_data[offset_x + 3] = q0 + offset_y
                     else:
-                        offset_arc = idx * 2 + cur_step * self.b * 2
-                        index_arc_data[offset_arc] = s0 + offset_y
-                        index_arc_data[offset_arc + 1] = s1 + offset_y
+                        offset_x = idx * 2 + cur_step * self.b * 2
+                        index_arc_data[offset_x] = s0 + offset_y
+                        index_arc_data[offset_x + 1] = s1 + offset_y
                         mask_data[idx][cur_step] = 1
             self.next_gold_feats()
         self.gold_index.data.copy_(torch.from_numpy(index_data))

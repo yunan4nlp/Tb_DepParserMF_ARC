@@ -95,7 +95,7 @@ class Decoder(nn.Module):
         self.output = nn.Linear(in_features= config.hidden_size,
                                 out_features=len(vocab._id2ac))
 
-    def forward_hidden(self, batch_hidden_state, batch_hidden_arc, cut, mask):
+    def forward(self, batch_hidden_state, batch_hidden_arc, cut, mask):
         mlp_hidden = self.mlp.forward(batch_hidden_state)
         arc_mlp_hidden = self.arc_mlp.forward(batch_hidden_arc)
         mlp_hidden = mlp_hidden.masked_scatter(mask, arc_mlp_hidden.masked_select(mask))
@@ -104,13 +104,6 @@ class Decoder(nn.Module):
         outputs = self.output.forward(mlp_hidden)
         outputs = outputs + cut
         return outputs
-
-    def forward(self, batch_hidden_state, cut):
-        mlp_hidden = self.mlp.forward(batch_hidden_state)
-        outputs = self.output.forward(mlp_hidden)
-        outputs = outputs + cut
-        return outputs
-
 '''
 class Table(nn.Embedding):
     def __init__(self, out_dim, alpha):
