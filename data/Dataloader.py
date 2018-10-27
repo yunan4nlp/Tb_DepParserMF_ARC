@@ -157,7 +157,8 @@ def batch_data_variable_actions(batch, vocab):
         b += 1
         heads.append(head)
         rels.append(rel)
-    return words, extwords, tags, heads, rels, lengths, masks, batch_sent, batch_actions, acs, batch_step_actions, batch_feats, batch_candid
+    return words, extwords, tags, heads, rels, lengths, masks, batch_sent, batch_actions, acs, \
+           batch_step_actions, batch_feats, batch_candid
 
 def batch_variable_depTree(trees, heads, rels, lengths, vocab):
     for tree, head, rel, length in zip(trees, heads, rels, lengths):
