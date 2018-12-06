@@ -16,3 +16,6 @@ class Instance:
             self.rels.append(w.rel)
             self.tags.append(w.tag)
 
+        assert len(self.words) == len(self.heads) == len(self.rels) == len(self.tags)
+        self.size = len(self.words)
+

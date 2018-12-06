@@ -65,14 +65,18 @@ def get_gold_candid(data, vocab):
         all_candid.append(inst_candid)
     return all_candid
 
-def inst(data, actions, feats, candid):
-    assert len(data) == len(actions) == len(feats) == len(candid)
+def inst(data, actions=None, feats=None, candid=None):
     inst = []
-    for idx in range(len(data)):
-        inst.append((data[idx], actions[idx], feats[idx], candid[idx]))
+    if actions is not None and feats is not None and candid is not None:
+        assert len(data) == len(actions) == len(feats) == len(candid)
+        for idx in range(len(data)):
+            inst.append((data[idx], actions[idx], feats[idx], candid[idx]))
+    else:
+        for idx in range(len(data)):
+            inst.append((data[idx], None, None, None))
     return inst
 
-def train(train_inst, dev_data, test_data, parser, vocab, config):
+def train(train_inst, dev_insts, test_insts, parser, vocab, config):
     encoder_optimizer = Optimizer(filter(lambda p: p.requires_grad, parser.encoder.parameters()), config)
     decoder_optimizer = Optimizer(filter(lambda p: p.requires_grad, parser.decoder.parameters()), config)
 
@@ -86,21 +90,32 @@ def train(train_inst, dev_data, test_data, parser, vocab, config):
 
         overall_action_correct,  overall_total_action = 0, 0
         for onebatch in data_iter(train_inst, config.train_batch_size, True):
-            words, extwords, tags, heads, rels, lengths, masks, sents, \
             gold_actions, acs, gold_step_actions, gold_feats, gold_candid = \
-                batch_data_variable_actions(onebatch, vocab)
-            parser.encoder.train()
-            parser.decoder.train()
-            parser.training = True
+                batch_actions_variable(onebatch, vocab)
+            words, extwords, tags, heads, rels, lengths, masks, sents= \
+                batch_data_variable(onebatch, vocab)
+
+            ### check ###
+            b = len(gold_actions)
+            assert b == len(lengths)
+            for idx in range(b):
+                word_num = lengths[idx]
+                action_num = len(gold_actions[idx])
+                #### 3 for shift, reduce, relation, 1 for the root no relation
+                assert word_num * 3 - 1 == action_num
+            ### check ###
+
+
+            parser.train()
             #with torch.autograd.profiler.profile() as prof:
             parser.encode(words, extwords, tags, masks)
-            parser.decode(sents, gold_step_actions, gold_feats, gold_candid, vocab)
+            predict_actions = parser.decode(sents, gold_feats, gold_candid, vocab)
             loss = parser.compute_loss(acs)
             loss = loss / config.update_every
             loss_value = loss.data.cpu().numpy()
             loss.backward()
             #print(prof.key_averages())
-            total_actions, correct_actions = parser.compute_accuracy()
+            total_actions, correct_actions = parser.compute_accuracy(predict_actions, gold_actions)
             overall_total_action += total_actions
             overall_action_correct += correct_actions
             during_time = float(time.time() - start_time)
@@ -123,11 +138,11 @@ def train(train_inst, dev_data, test_data, parser, vocab, config):
 
             if batch_iter % config.validate_every == 0 or batch_iter == batch_num:
                 arc_correct, rel_correct, arc_total, dev_uas, dev_las = \
-                evaluate(dev_data, parser, vocab, config.dev_file + '.' + str(global_step))
+                evaluate(dev_insts, parser, vocab, config.dev_file + '.' + str(global_step))
                 print("Dev: uas = %d/%d = %.2f, las = %d/%d =%.2f" % \
                         (arc_correct, arc_total, dev_uas, rel_correct, arc_total, dev_las))
                 arc_correct, rel_correct, arc_total, test_uas, test_las = \
-                evaluate(test_data, parser, vocab, config.test_file + '.' + str(global_step))
+                evaluate(test_insts, parser, vocab, config.test_file + '.' + str(global_step))
                 print("Test: uas = %d/%d = %.2f, las = %d/%d =%.2f" % \
                         (arc_correct, arc_total, test_uas, rel_correct, arc_total, test_las))
                 if dev_uas > best_UAS:
@@ -139,23 +154,21 @@ def train(train_inst, dev_data, test_data, parser, vocab, config):
 
 def evaluate(data, parser, vocab, outputFile):
     start = time.time()
-    parser.training = False
-    parser.encoder.eval()
-    parser.decoder.eval()
+    parser.eval()
     output = open(outputFile, 'w', encoding='utf-8')
     arc_total_test, arc_correct_test, rel_total_test, rel_correct_test = 0, 0, 0, 0
     for onebatch in data_iter(data, config.test_batch_size, False):
-        words, extwords, tags, heads, rels, lengths, masks = \
+        words, extwords, tags, heads, rels, lengths, masks, sents= \
             batch_data_variable(onebatch, vocab)
         count = 0
         parser.encode(words, extwords, tags, masks)
-        parser.decode(onebatch, None, None, None, vocab)
+        parser.decode(sents, None, None, vocab)
         for idx in range(0, parser.b):
             cur_states = parser.batch_states[idx]
             cur_step = parser.step[idx]
             tree = cur_states[cur_step].get_result(vocab)
             printDepTree(output, tree)
-            arc_total, arc_correct, rel_total, rel_correct = evalDepTree(onebatch[idx], tree)
+            arc_total, arc_correct, rel_total, rel_correct = evalDepTree(sents[idx], tree)
             arc_total_test += arc_total
             arc_correct_test += arc_correct
             rel_total_test += rel_total
@@ -223,6 +236,7 @@ if __name__ == '__main__':
     pickle.dump(vocab, open(config.save_vocab_path, 'wb'))
     torch.set_num_threads(args.thread)
 
+
     config.use_cuda = False
     if gpu and args.use_cuda: config.use_cuda = True
     print("\nGPU using status: ", config.use_cuda)
@@ -244,6 +258,8 @@ if __name__ == '__main__':
     print("Get Candidates Time: ", time.time() - start_a)
 
     train_insts = inst(train_data, train_actions, train_feats, train_candid)
+    dev_insts = inst(dev_data)
+    test_insts = inst(test_data)
 
     encoder = Encoder(vocab, config, vec)
     decoder = Decoder(vocab, config)
@@ -254,4 +270,4 @@ if __name__ == '__main__':
         encoder = encoder.cuda()
         decoder = decoder.cuda()
     parser = TransitionBasedParser(encoder, decoder, vocab.ROOT, config, vocab.ac_size)
-    train(train_insts, dev_data, test_data, parser, vocab, config)
+    train(train_insts, dev_insts, test_insts, parser, vocab, config)

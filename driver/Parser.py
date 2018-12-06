@@ -22,17 +22,23 @@ class TransitionBasedParser(object):
             self.cut = self.cut.cuda()
         self.gold_pred_pairs = []
         self.training = True
-        if self.config.train_batch_size > self.config.test_batch_size:
-            batch_size = self.config.train_batch_size
-        else:
-            batch_size = self.config.test_batch_size
-        self.batch_states = []
+        self.batch_states = [] # only for predicting
         self.step = []
-        for idx in range(0, batch_size):
+        for idx in range(self.config.test_batch_size):
             self.batch_states.append([])
             self.step.append(0)
             for idy in range(0, 1024):
                 self.batch_states[idx].append(State())
+
+    def train(self):
+        self.encoder.train()
+        self.decoder.train()
+        self.training = True
+
+    def eval(self):
+        self.encoder.eval()
+        self.decoder.eval()
+        self.training = False
 
     def encode(self, words, extwords, tags, masks):
         if self.use_cuda:
@@ -51,17 +57,18 @@ class TransitionBasedParser(object):
             ignore_index=-1)
         return arc_loss
 
-    def compute_accuracy(self):
+    def compute_accuracy(self, predict_actions, gold_actions):
         total_num = 0
         correct = 0
-        for iter in self.gold_pred_pairs:
-            gold_len = len(iter[0])
-            pred_len = len(iter[1])
-            assert gold_len == pred_len
-            total_num += gold_len
-            for idx in range(0, gold_len):
-                if iter[0][idx] == iter[1][idx]:
+        batch_size = len(predict_actions)
+        assert batch_size == len(gold_actions)
+        for b_iter in range(batch_size):
+            action_num = len(predict_actions[b_iter])
+            assert action_num == len(gold_actions[b_iter])
+            for cur_step in range(action_num):
+                if predict_actions[b_iter][cur_step] == gold_actions[b_iter][cur_step]:
                     correct += 1
+                total_num += 1
         return total_num, correct
 
     def real_action_num(self, batch_feats):
@@ -73,28 +80,27 @@ class TransitionBasedParser(object):
             self.real_ac_num.append(r_a)
 
     def get_feats_from_state(self):
-        b = len(self.batch_states)
         feats = []
-        for idx in range(0, b):
+        for idx in range(self.b):
             cur_states = self.batch_states[idx]
             cur_step = self.step[idx]
             if not cur_states[cur_step].is_end():
                 feat = cur_states[cur_step].prepare_index()
-                feats.append(feat)
+                feats.append([feat])
             else:
-                feats.append(None)
+                feats.append([None])
         return feats
 
 
     def compute(self, feats, vocab):
         hidden_states, hidden_arc, mask = self.hidden_prepare(feats, self.training)  # batch, action_num, hidden_size
-        cut = self.get_action_cut(vocab, self.training)  # batch, action_num, hidden_size
+        cut = self.get_action_cut(vocab)  # batch, action_num, hidden_size
         self.decoder_outputs = self.decoder.forward(batch_hidden_state=hidden_states,
                                                     batch_hidden_arc=hidden_arc,
                                                     cut=cut,
                                                     mask=mask)
 
-    def decode(self, batch_data, batch_step_actions, batch_feats, batch_candid, vocab):
+    def decode(self, batch_insts, batch_feats, batch_candid, vocab):
         self.b, _, l2 = self.encoder_outputs.size() #batch, sent_len, hidden_size
         if self.b != self.bucket.size()[0]:
             self.bucket = Variable(torch.zeros(self.b, 1, l2)).type(torch.FloatTensor)
@@ -106,29 +112,23 @@ class TransitionBasedParser(object):
             self.step[idx] = 0
 
         if self.training:
-            feats = batch_feats # those feats are prepared already
-            self.real_action_num(feats)
+            self.real_action_num(batch_feats)
             self.batch_candid = batch_candid
-            self.compute(feats, vocab)
-            d_outputs = self.decoder_outputs.transpose(0, 1)
-            self.gold_pred_pairs.clear()
-            for idx in range(0, self.a):
-                action_scores = d_outputs[idx]
-                pred_ac_ids = self.get_predicted_ac_id(action_scores, idx)
-                pred_actions = self.get_predict_actions(pred_ac_ids, vocab)
-                gold_actions = batch_step_actions[idx]
-                self.gold_pred_pairs.append((gold_actions, pred_actions))
+            self.compute(batch_feats, vocab)
+            batch_scores = self.decoder_outputs.data.cpu().numpy()
+            predict_actions = self.score2actions(batch_feats, batch_scores, vocab)
+            return predict_actions
         else:
             for idx in range(0, self.b):
                 start_state = self.batch_states[idx][0]
                 start_state.clear()
-                start_state.ready(batch_data[idx], vocab)
-            while not self.all_states_are_finished(self.batch_states):
-                feats = self.get_feats_from_state()
-                self.compute(feats, vocab)
-                pred_ac_ids = self.get_predicted_ac_id(self.decoder_outputs)
-                pred_actions = self.get_predict_actions(pred_ac_ids, vocab)
-                self.move(pred_actions, vocab)
+                start_state.ready(batch_insts[idx], vocab)
+            while not self.all_states_are_finished(self.batch_states, self.b):
+                batch_feats = self.get_feats_from_state()
+                self.compute(batch_feats, vocab)
+                batch_scores = self.decoder_outputs.data.cpu().numpy()
+                predict_actions = self.score2actions(batch_feats, batch_scores, vocab)
+                self.move(predict_actions, self.b)
                 global_step += 1
 
     '''
@@ -140,6 +140,21 @@ class TransitionBasedParser(object):
                 self.step[idx] += 1
     '''
 
+    def score2actions(self, batch_feats, batch_scores, vocab):
+        batch_size = len(batch_feats)
+        assert batch_size == len(batch_scores)
+        predict_actions = []
+        for b_iter in range(batch_size):
+            r_a = len(batch_feats[b_iter])
+            actions = []
+            for cur_step in range(r_a):
+                cur_step_action_id = np.argmax(batch_scores[b_iter][cur_step])
+                cur_step_action = vocab.id2ac(cur_step_action_id)
+                actions.append(cur_step_action)
+            predict_actions.append(actions)
+        return predict_actions
+
+
     def get_predict_actions(self, pred_ac_ids, vocab):
         pred_actions = []
         for ac_id in pred_ac_ids:
@@ -147,10 +162,9 @@ class TransitionBasedParser(object):
             pred_actions.append(pred_ac)
         return pred_actions
 
-    def all_states_are_finished(self, batch_states):
-        b = len(batch_states)
+    def all_states_are_finished(self, batch_states, batch_size):
         is_finish = True
-        for idx in range(0, b):
+        for idx in range(batch_size):
             cur_states = batch_states[idx]
             if not cur_states[self.step[idx]].is_end():
                 is_finish = False
@@ -200,11 +214,13 @@ class TransitionBasedParser(object):
             mask_data[offset_mask][0] = 1
 
     def hidden_prepare(self, batch_feats, bTrain=True):
-        b, l1, l2 = self.encoder_outputs.size() # l1, bucket
+        b, l1, l2 = self.encoder_outputs.size() # previous l1 + bucket
+        a = self.max_action_len(batch_feats)
         if bTrain:
-            a = self.max_action_len(batch_feats)# training, whole step
+            assert (l1 - 1) * 3 - 1 == a# training, whole step
         else:
-            a = 1 # 4 predicting, only one step
+            assert a == 1 # 4 predicting, only one step
+
         self.a = a
         mask = Variable(torch.zeros(b * a, 1)).type(torch.ByteTensor)
         index = Variable(torch.zeros(b * a * 4)).type(torch.LongTensor)
@@ -216,24 +232,20 @@ class TransitionBasedParser(object):
             index = index.cuda()
             index_arc = index_arc.cuda()
             mask = mask.cuda()
-        if bTrain:
-            for b_iter in range(b):
-                feats = batch_feats[b_iter]
-                r_a = self.real_ac_num[b_iter]
-                for cur_step in range(r_a):
-                    feat = feats[cur_step]
-                    offest = b_iter, cur_step
-                    data = index_data, index_arc_data, mask_data
-                    shape = a, b, l1
-                    self.feat2IndexData(feat, data, shape, offest)
-        else:
-            for idx in range(0, b):
-                feat = batch_feats[idx]
-                if feat is not None: # None means the parsing is completed
-                    offest = idx, 0
-                    data = index_data, index_arc_data, mask_data
-                    shape = a, b, l1
-                    self.feat2IndexData(feat, data, shape, offest)
+        #if bTrain:
+        for b_iter in range(b):
+            feats = batch_feats[b_iter]
+            r_a = len(feats)
+            if not self.training:
+                assert r_a == 1
+            for cur_step in range(r_a):
+                feat = feats[cur_step]
+                if feat is None:
+                    break
+                offest = b_iter, cur_step
+                data = index_data, index_arc_data, mask_data
+                shape = a, b, l1
+                self.feat2IndexData(feat, data, shape, offest)
         index.data.copy_(torch.from_numpy(index_data))
         index_arc.data.copy_(torch.from_numpy(index_arc_data))
         mask.data.copy_(torch.from_numpy(mask_data))
@@ -253,6 +265,8 @@ class TransitionBasedParser(object):
                 if not cur_states[self.step[idx]].is_end():
                     ac_id = np.argmax(action_scores[idx])
                     ac_ids.append(ac_id)
+                else:
+                    ac_ids.append(None)
         else:
             for idx in range(0, self.b):
                 r_a = self.real_ac_num[idx]
@@ -261,27 +275,30 @@ class TransitionBasedParser(object):
                     ac_ids.append(ac_id)
         return ac_ids
 
-    def move(self, pred_actions, vocab):
+    def move(self, pred_actions, batch_size):
         #count = 0
         #for idx in range(0, self.b):
             #cur_states = self.batch_states[idx]
             #if not cur_states[self.step[idx]].is_end():
                 #count += 1
         #assert len(pred_actions) == count
-        offset = 0
-        for idx in range(0, self.b):
+        for idx in range(batch_size):
             cur_states = self.batch_states[idx]
             cur_step = self.step[idx]
             if not cur_states[cur_step].is_end():
                 next_state = self.batch_states[idx][cur_step + 1]
-                cur_states[cur_step].move(next_state, pred_actions[offset])
-                offset += 1
+                cur_states[cur_step].move(next_state, pred_actions[idx][0])
                 self.step[idx] += 1
 
-    def get_action_cut(self, vocab, bTrain=True): # cut off the impossible action.
+    def get_action_cut(self, vocab): # cut off the impossible action.
         mask_data = np.array([[[0] * vocab.ac_size] * self.a] * self.b, dtype=float)
-        if bTrain:#4 training, batch, action_len, hidden_size
+
+        if self.training:
             assert self.a > 1
+        else:
+            assert self.a == 1
+
+        if self.training:#4 training, batch, action_len, hidden_size
             for idx in range(0, self.b):
                 r_a = self.real_ac_num[idx]
                 for idy in range(0, self.a):
@@ -289,7 +306,6 @@ class TransitionBasedParser(object):
                     if idy < r_a:
                         mask_data[idx][idy] = self.batch_candid[idx][idy] * -1e+20
         else:#4 predicting, batch, 1, hidden_size
-            assert self.a == 1 # predict only one step
             for idx in range(0, self.b):
                 cur_states = self.batch_states[idx]
                 cur_step = self.step[idx]
